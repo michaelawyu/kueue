@@ -25,6 +25,7 @@ spec:
       - args:
         - --config=/controller_manager_config.yaml
         - --zap-log-level=2
+        - --feature-gates={{ .Values.featureGates }}
         {{- include "kueue.featureGates" . | indent 8 }}
         command:
         - /manager

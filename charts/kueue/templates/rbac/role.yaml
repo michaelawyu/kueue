@@ -413,9 +413,7 @@ rules:
     resources:
       - multikueueclusters
     verbs:
-      - get
-      - list
-      - watch
+      - "*"
   - apiGroups:
       - kueue.x-k8s.io
     resources:
@@ -429,9 +427,7 @@ rules:
     resources:
       - multikueueconfigs
     verbs:
-      - get
-      - list
-      - watch
+      - "*"
   - apiGroups:
       - kueue.x-k8s.io
     resources:
@@ -554,3 +550,16 @@ rules:
       - get
       - list
       - watch
+  - apiGroups:
+      - multicluster.x-k8s.io
+    resources:
+      - "*"
+    verbs:
+      - "*"
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+      - secrets
+    verbs:
+      - "*"

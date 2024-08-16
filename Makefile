@@ -192,7 +192,7 @@ image-local-build:
 
 # Build the multiplatform container image locally and push to repo.
 .PHONY: image-local-push
-image-local-push: PUSH=--push
+image-local-push: PUSH=--load
 image-local-push: image-local-build
 
 .PHONY: image-build

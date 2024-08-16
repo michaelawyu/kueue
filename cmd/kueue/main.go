@@ -44,6 +44,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
+	clusterinventoryv1alpha1 "sigs.k8s.io/kueue/apis/clusterinventory/v1alpha1"
 	configapi "sigs.k8s.io/kueue/apis/config/v1beta1"
 	kueuealpha "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
@@ -52,6 +53,7 @@ import (
 	"sigs.k8s.io/kueue/pkg/constants"
 	"sigs.k8s.io/kueue/pkg/controller/admissionchecks/multikueue"
 	"sigs.k8s.io/kueue/pkg/controller/admissionchecks/provisioning"
+	"sigs.k8s.io/kueue/pkg/controller/clusterinventory"
 	"sigs.k8s.io/kueue/pkg/controller/core"
 	"sigs.k8s.io/kueue/pkg/controller/core/indexer"
 	"sigs.k8s.io/kueue/pkg/controller/jobframework"
@@ -94,6 +96,7 @@ func init() {
 			return nil
 		}),
 	)
+	utilruntime.Must(clusterinventoryv1alpha1.AddToScheme(scheme))
 
 	// +kubebuilder:scaffold:scheme
 }
@@ -261,6 +264,18 @@ func setupControllers(mgr ctrl.Manager, cCache *cache.Cache, queues *queue.Manag
 			multikueue.WithWorkerLostTimeout(cfg.MultiKueue.WorkerLostTimeout.Duration),
 		); err != nil {
 			setupLog.Error(err, "Could not setup MultiKueue controller")
+			os.Exit(1)
+		}
+
+		// Set up the Cluster Inventory support controller.
+		cpReconciler := clusterinventory.Reconciler{
+			HubClient: mgr.GetClient(),
+			// For the demo purposes it is assumed that the cluster manager is always Fleet.
+			MultiClusterManager: "fleet",
+			KueueNS:             "kueue-system",
+		}
+		if err := cpReconciler.SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "Could not setup Cluster Inventory controller")
 			os.Exit(1)
 		}
 	}

@@ -20,8 +20,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -43,6 +45,22 @@ import (
 	"sigs.k8s.io/kueue/pkg/util/api"
 	utilmaps "sigs.k8s.io/kueue/pkg/util/maps"
 	"sigs.k8s.io/kueue/pkg/workload"
+)
+
+const (
+	// clusterManagerSchedulingHintAnnotation is the annotation key used to hint the scheduling decisions
+	// made by a cluster manager. The annotation value is a list of comma-separated cluster names,
+	// with the first cluster being the most preferred one.
+	//
+	// Note (chenyu1): this is obviously a hack, but for demo purposes it should suffice.
+	clusterManagerSchedulingHintAnnotation = "kueue.x-k8s.io/cluster-manager-scheduling-hint"
+
+	// The time threshold after which a reservation must be acknowledged by the manager.
+	reservationAckTimeout = 10 * time.Second
+
+	// The % of reservations that must complete before the manager can make an evaluation and
+	// eventually acknowledge one of them.
+	minimumPctOfReservationsToConsider = 0.5
 )
 
 var (
@@ -78,22 +96,52 @@ func (g *wlGroup) IsFinished() bool {
 
 // FirstReserving returns true if there is a workload reserving quota,
 // the string identifies the remote cluster.
-func (g *wlGroup) FirstReserving() (bool, string) {
-	found := false
-	bestMatch := ""
+func (g *wlGroup) FirstReserving() (bool, string, bool, time.Duration) {
+	matches := []string{}
 	bestTime := time.Now()
+	earliestReservationTimestamp := bestTime.Add(0)
+
+	// Find all reservations that have been made.
 	for remote, wl := range g.remotes {
 		if wl == nil {
 			continue
 		}
 		c := apimeta.FindStatusCondition(wl.Status.Conditions, kueue.WorkloadQuotaReserved)
-		if c != nil && c.Status == metav1.ConditionTrue && (!found || c.LastTransitionTime.Time.Before(bestTime)) {
-			found = true
-			bestMatch = remote
-			bestTime = c.LastTransitionTime.Time
+		if c != nil && c.Status == metav1.ConditionTrue {
+			matches = append(matches, remote)
+			if c.LastTransitionTime.Time.Before(earliestReservationTimestamp) {
+				earliestReservationTimestamp = c.LastTransitionTime.Time
+			}
 		}
 	}
-	return found, bestMatch
+
+	// Determine if an evaluation can be made; wait if not enough reservations have been made.
+	waitTime := reservationAckTimeout - bestTime.Sub(earliestReservationTimestamp)
+	if float32(len(matches)) < float32(len(g.remotes))*minimumPctOfReservationsToConsider && waitTime < 0 {
+		return false, "", true, waitTime
+	}
+
+	// Find the best reservation.
+	if len(matches) > 0 {
+		localWl := g.local
+		clusterNameCommaList, ok := localWl.Annotations[clusterManagerSchedulingHintAnnotation]
+		if !ok {
+			// If there is no scheduling hint, we just pick the first reservation.
+			return true, matches[0], false, 0
+		}
+
+		clusterNames := strings.Split(clusterNameCommaList, ",")
+		for _, clusterName := range clusterNames {
+			if _, found := g.remotes[clusterName]; found {
+				return true, clusterName, false, 0
+			}
+		}
+
+		// None of the clusters in the scheduling hint have made a reservation; fall back to the first
+		// cluster that has made a reservation.
+		return true, matches[0], false, 0
+	}
+	return false, "", false, 0
 }
 
 func (g *wlGroup) RemoteFinishedCondition() (*metav1.Condition, string) {
@@ -175,6 +223,28 @@ func (w *wlReconciler) Reconcile(ctx context.Context, req reconcile.Request) (re
 			rejectionMessage = "No multikueue adapter found"
 		}
 		return reconcile.Result{}, w.updateACS(ctx, wl, mkAc, kueue.CheckStateRejected, rejectionMessage)
+	}
+
+	// Sync the Fleet CRP reference from the job object to the Kueue workload object (if any).
+	//
+	// Currently only the Job API is supported.
+	if adapter.GVK().String() == batchv1.SchemeGroupVersion.WithKind("Job").String() {
+		job := &batchv1.Job{}
+		if err := w.client.Get(ctx, types.NamespacedName{Name: owner.Name, Namespace: wl.Namespace}, job); err != nil {
+			return reconcile.Result{}, err
+		}
+
+		if clusterNameCommaList, ok := job.Annotations[clusterManagerSchedulingHintAnnotation]; ok {
+			if wl.Annotations == nil {
+				wl.Annotations = make(map[string]string)
+			}
+			wl.Annotations[clusterManagerSchedulingHintAnnotation] = clusterNameCommaList
+		}
+
+		if err := w.client.Update(ctx, wl); err != nil {
+			log.V(2).Error(err, "Failed to update workload with Fleet CRP reference")
+			return reconcile.Result{}, err
+		}
 	}
 
 	// If the workload is deleted there is a chance that it's owner is also deleted. In that case
@@ -347,7 +417,10 @@ func (w *wlReconciler) reconcileGroup(ctx context.Context, group *wlGroup) (reco
 	}
 
 	// 3. get the first reserving
-	hasReserving, reservingRemote := group.FirstReserving()
+	hasReserving, reservingRemote, shouldRequeue, waitTime := group.FirstReserving()
+	if shouldRequeue {
+		return ctrl.Result{RequeueAfter: waitTime}, nil
+	}
 	if hasReserving {
 		// remove the non-reserving worker workloads
 		for rem, remWl := range group.remotes {

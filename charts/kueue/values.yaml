@@ -23,7 +23,7 @@ controllerManager:
     image:
       repository: us-central1-docker.pkg.dev/k8s-staging-images/kueue/kueue
       # This should be set to 'IfNotPresent' for released version      
-      pullPolicy: Always
+      pullPolicy: IfNotPresent
     podAnnotations: {}
     resources:
       limits:
@@ -95,15 +95,15 @@ managerConfig:
     integrations:
       frameworks:
       - "batch/job"
-      - "kubeflow.org/mpijob"
-      - "ray.io/rayjob"
-      - "ray.io/raycluster"
-      - "jobset.x-k8s.io/jobset"
-      - "kubeflow.org/mxjob"
-      - "kubeflow.org/paddlejob"
-      - "kubeflow.org/pytorchjob"
-      - "kubeflow.org/tfjob"
-      - "kubeflow.org/xgboostjob"
+      #- "kubeflow.org/mpijob"
+      #- "ray.io/rayjob"
+      #- "ray.io/raycluster"
+      #- "jobset.x-k8s.io/jobset"
+      #- "kubeflow.org/mxjob"
+      #- "kubeflow.org/paddlejob"
+      #- "kubeflow.org/pytorchjob"
+      #- "kubeflow.org/tfjob"
+      #- "kubeflow.org/xgboostjob"
     #  - "pod"
     #  externalFrameworks:
     #  - "Foo.v1.example.com"
@@ -137,3 +137,4 @@ webhookService:
       protocol: TCP
       targetPort: 9443
   type: ClusterIP
+featureGates: ""
